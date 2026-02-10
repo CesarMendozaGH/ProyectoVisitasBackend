@@ -1,0 +1,6 @@
+@ProyectoVisitas_HostAddress = http://localhost:5182
+
+GET {{ProyectoVisitas_HostAddress}}/api/Espacios
+Accept: application/json
+
+###
