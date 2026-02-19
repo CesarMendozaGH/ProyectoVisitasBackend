@@ -7,6 +7,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="EPPlus" Version="8.4.2" />
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.2" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.2">
       <PrivateAssets>all</PrivateAssets>
@@ -20,6 +21,13 @@
     <PackageReference Include="Microsoft.VisualStudio.Web.CodeGeneration.Design" Version="10.0.2" />
     <PackageReference Include="Swashbuckle.AspNetCore.SwaggerGen" Version="10.1.0" />
     <PackageReference Include="Swashbuckle.AspNetCore.SwaggerUI" Version="10.1.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Folder Include="wwwroot\Temp\" />
+    <Folder Include="wwwroot\Templates\" />
+    <Folder Include="wwwroot\Uploads\Firmas\" />
+    <Folder Include="wwwroot\Uploads\FotoRostro\" />
   </ItemGroup>
 
 </Project>

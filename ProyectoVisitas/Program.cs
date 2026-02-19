@@ -1,10 +1,11 @@
-using OfficeOpenXml; 
 using Microsoft.EntityFrameworkCore;
+using OfficeOpenXml; 
 using ProyectoVisitas.Models;
+using ProyectoVisitas.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
-ExcelPackage.LicenseContext = LicenseContext.NonCommercial;
+ExcelPackage.License.SetNonCommercialOrganization("ProyectoVisitas");
 
 // Base de datos
 builder.Services.AddDbContext<BdvisitasContext>(options =>
@@ -24,7 +25,10 @@ builder.Services.AddCors(options =>
 // Servicios
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen(); 
+builder.Services.AddSwaggerGen();
+
+//builder para excel
+builder.Services.AddScoped<IReportesService, ReportesService>();
 
 var app = builder.Build();
 

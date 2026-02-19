@@ -2,6 +2,8 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using ProyectoVisitas.Models;
+using ProyectoVisitas.Services;
+
 
 namespace ProyectoVisitas.Controllers
 {
@@ -10,10 +12,12 @@ namespace ProyectoVisitas.Controllers
     public class ComunitarioController : ControllerBase
     {
         private readonly BdvisitasContext _context;
+        private readonly IReportesService _reportesService;
 
-        public ComunitarioController(BdvisitasContext context)
+        public ComunitarioController(BdvisitasContext context, IReportesService reportesService)
         {
             _context = context;
+            _reportesService = reportesService;
         }
 
         // ==========================================
