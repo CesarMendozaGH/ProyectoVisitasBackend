@@ -92,8 +92,21 @@ namespace ProyectoVisitas.Controllers
             if (datos.PerfilId <= 0) return BadRequest("ID de perfil inválido.");
             if (datos.HorasACubrir <= 0) return BadRequest("Las horas a cubrir deben ser mayor a 0.");
 
-            // B. Lógica de Bitácora (Igual que antes...)
+            //VALIDACION ANTI DUPLICADOS
             DateOnly fechaHoy = DateOnly.FromDateTime(DateTime.Now);
+
+            //si ya tiene una entrada en el dia y no ha registrado salida, no puede registrar otra entrada
+            bool yaEstaAdentro = await _context.ComunitarioAsistencias
+                .AnyAsync(a => a.PerfilId == datos.PerfilId 
+                            && a.FechaAsistencia == fechaHoy 
+                            && a.HoraDeSalida == null);
+
+            if (yaEstaAdentro)
+            {
+                return BadRequest("Ya existe una entrada abierta para este perfil el día de hoy. Por favor registre la salida antes de intentar nuevamente.");
+            }
+            // B. Lógica de Bitácora (Igual que antes...)
+           
             var bitacoraDia = await _context.BitacoraGeneralAccesos.FirstOrDefaultAsync(b => b.Fecha == fechaHoy);
 
             if (bitacoraDia == null)
@@ -261,6 +274,7 @@ namespace ProyectoVisitas.Controllers
             });
         }
 
+
         // ==========================================
         // 5. OBTENER TODOS LOS PERFILES (Para listas)
         // ==========================================
@@ -273,6 +287,71 @@ namespace ProyectoVisitas.Controllers
             return await _context.ComunitarioPerfiles
                                  .OrderByDescending(p => p.IdPerfilComunitario) // Muestra los más nuevos primero
                                  .ToListAsync();
+        }
+
+
+        // ==========================================
+        // 6. MODIFICAR PERFIL (Corregir datos)
+        // ==========================================
+        // PUT: api/Comunitario/modificar-perfil/{id}
+        [HttpPut("modificar-perfil/{id}")]
+        public async Task<IActionResult> ModificarPerfil(int id, [FromBody] ComunitarioPerfile perfilModificado)
+        {
+            if (id != perfilModificado.IdPerfilComunitario)
+                return BadRequest("El ID de la URL no coincide con el cuerpo.");
+
+            var perfilExistente = await _context.ComunitarioPerfiles.FindAsync(id);
+            if (perfilExistente == null) return NotFound("Perfil no encontrado.");
+
+            // Actualizamos solo los campos permitidos
+            perfilExistente.Nombre = perfilModificado.Nombre;
+            perfilExistente.ApellidoPaterno = perfilModificado.ApellidoPaterno;
+            perfilExistente.ApellidoMaterno = perfilModificado.ApellidoMaterno;
+            perfilExistente.HorasTotalesDeuda = perfilModificado.HorasTotalesDeuda;
+            //por cualquier cosa requerida
+            perfilExistente.HorasAcumuladasActuales = perfilModificado.HorasAcumuladasActuales;
+            // Opcional: Si quieres permitir cambiar la foto también
+            perfilExistente.UrlFotoRostro = perfilModificado.UrlFotoRostro;
+
+
+            try
+            {
+                await _context.SaveChangesAsync();
+                return Ok(new { message = "Perfil actualizado correctamente." });
+            }
+            catch (DbUpdateConcurrencyException)
+            {
+                return StatusCode(500, "Error de concurrencia al actualizar.");
+            }
+        }
+
+        // ==========================================
+        // 7. DESACTIVAR / REACTIVAR (Borrado Lógico)
+        // ==========================================
+        // PUT: api/Comunitario/cambiar-estatus/{id}
+        [HttpPut("cambiar-estatus/{id}")]
+        public async Task<IActionResult> CambiarEstatus(int id)
+        {
+            var perfil = await _context.ComunitarioPerfiles.FindAsync(id);
+            if (perfil == null) return NotFound("Perfil no encontrado.");
+
+            // Switch simple: Si es ACTIVO pasa a INACTIVO y viceversa
+            if (perfil.EstatusServicio == "ACTIVO")
+            {
+                perfil.EstatusServicio = "INACTIVO";
+            }
+            else
+            {
+                perfil.EstatusServicio = "ACTIVO";
+            }
+
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                message = $"El perfil ahora está {perfil.EstatusServicio}",
+                nuevoEstatus = perfil.EstatusServicio
+            });
         }
     }
 }

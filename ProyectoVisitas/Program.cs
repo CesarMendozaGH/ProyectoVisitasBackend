@@ -1,7 +1,10 @@
+using OfficeOpenXml; 
 using Microsoft.EntityFrameworkCore;
 using ProyectoVisitas.Models;
 
 var builder = WebApplication.CreateBuilder(args);
+
+ExcelPackage.LicenseContext = LicenseContext.NonCommercial;
 
 // Base de datos
 builder.Services.AddDbContext<BdvisitasContext>(options =>
@@ -25,6 +28,8 @@ builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
 
+
+
 // Pipeline
 if (app.Environment.IsDevelopment())
 {
@@ -32,6 +37,7 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
+app.UseStaticFiles();
 app.UseHttpsRedirection();
 
 // 2. USAR EL CORS AQUÍ (OJO: Antes de Authorization y MapControllers)
