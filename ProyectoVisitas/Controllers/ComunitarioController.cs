@@ -357,5 +357,38 @@ namespace ProyectoVisitas.Controllers
                 nuevoEstatus = perfil.EstatusServicio
             });
         }
+
+        // ==========================================
+        // 8. DESCARGAR REPORTE DIARIO EXCEL
+        // ==========================================
+        // GET: api/Comunitario/reporte-diario
+        [HttpGet("reporte-diario")]
+        public async Task<IActionResult> DescargarReporteDiario([FromQuery] string? fecha)
+        {
+            try
+            {
+                // Si no mandan fecha, usamos la de hoy
+                DateOnly fechaFiltro = string.IsNullOrEmpty(fecha)
+                    ? DateOnly.FromDateTime(DateTime.Today)
+                    : DateOnly.Parse(fecha);
+
+                // Pedimos el archivo Excel ya armado a nuestro nuevo servicio
+                byte[] excelBytes = await _reportesService.GenerarReporteAsistenciaComunitariaAsync(fechaFiltro);
+
+                string fileName = $"Reporte_Asistencia_{fechaFiltro:dd_MM_yyyy}.xlsx";
+
+                // Devolvemos el archivo directamente
+                return File(excelBytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", fileName);
+            }
+            catch (FileNotFoundException ex)
+            {
+                // Si alguien olvidó poner la plantilla en wwwroot/Templates
+                return StatusCode(500, ex.Message);
+            }
+            catch (Exception ex)
+            {
+                return BadRequest($"Error al generar el reporte: {ex.Message}");
+            }
+        }
     }
 }

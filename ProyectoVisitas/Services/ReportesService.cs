@@ -5,7 +5,8 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.EntityFrameworkCore;
 using OfficeOpenXml;
-using ProyectoVisitas.Models; // Aquí viven BdvisitasContext y tus tablas
+using OfficeOpenXml.Style;
+using ProyectoVisitas.Models;
 
 namespace ProyectoVisitas.Services
 {
@@ -16,7 +17,7 @@ namespace ProyectoVisitas.Services
 
     public class ReportesService : IReportesService
     {
-        private readonly BdvisitasContext _context; // <--- CORRECCIÓN 1: Tu contexto real
+        private readonly BdvisitasContext _context;
         private readonly IWebHostEnvironment _env;
 
         public ReportesService(BdvisitasContext context, IWebHostEnvironment env)
@@ -27,48 +28,60 @@ namespace ProyectoVisitas.Services
 
         public async Task<byte[]> GenerarReporteAsistenciaComunitariaAsync(DateOnly fecha)
         {
-            // 1. Obtener datos + INCLUIR el Perfil usando el nombre correcto "Perfil"
             var asistencias = await _context.ComunitarioAsistencias
-                .Include(a => a.Perfil) // <--- CORRECCIÓN 2: Propiedad de navegación real
+                .Include(a => a.Perfil)
                 .Where(a => a.FechaAsistencia == fecha)
                 .OrderBy(a => a.HoraDeInicio)
                 .ToListAsync();
 
-            // 2. Ruta de tu NUEVA plantilla limpia
-            string templatePath = Path.Combine(_env.WebRootPath, "Templates", "LISTA DE ASITENCIA (el nuevo).xlsx");
+            string templatePath = Path.Combine(_env.WebRootPath, "Templates", "ListaDeAsistencia.xlsx");
             FileInfo fileInfo = new FileInfo(templatePath);
 
             if (!fileInfo.Exists)
                 throw new FileNotFoundException("La plantilla de Excel no se encontró en el servidor.", templatePath);
 
-            // 3. Rellenar el Excel
             using (var package = new ExcelPackage(fileInfo))
             {
                 var worksheet = package.Workbook.Worksheets[0];
 
-                // Rellenar Fecha y Folio
-                worksheet.Cells["J3"].Value = fecha.ToString("dd-MMM-yyyy").ToUpper();
-                worksheet.Cells["J4"].Value = $"FOLIO-{fecha:MMdd}";
+                // 1. FECHA Y FOLIO EN LA FILA 2 (Para NO aplastar los encabezados de la fila 3)
+                // Usamos tu excelente idea de combinar el texto en una sola celda ancha
+                worksheet.Cells["D2:G2"].Merge = true;
+                worksheet.Cells["D2"].Value = $"FECHA: {fecha:dd-MMM-yyyy}                                                                                         FOLIO: {fecha:MMdd}".ToUpper();
+                worksheet.Cells["D2"].Style.HorizontalAlignment = ExcelHorizontalAlignment.Right; // Alineado a la derecha
+                worksheet.Cells["D2"].Style.Font.Bold = true;
 
-                // La tabla de datos ahora empieza en la fila 7
-                int row = 7;
+                // 2. LA TABLA EMPIEZA EN LA FILA 4
+                int row = 4;
                 int consecutivo = 1;
 
                 foreach (var item in asistencias)
                 {
+                    // Col 1 y 2: ID y Nombre
                     worksheet.Cells[row, 1].Value = consecutivo;
                     worksheet.Cells[row, 2].Value = $"{item.Nombre} {item.ApellidoPaterno} {item.ApellidoMaterno}".Trim();
+                    worksheet.Cells[row, 2].Style.Font.Bold = false;
+
+                    // Col 3 y 4: Horarios
                     worksheet.Cells[row, 3].Value = item.HoraDeInicio.ToString("HH:mm");
+                    worksheet.Cells[row, 3].Style.Font.Bold = false;
                     worksheet.Cells[row, 4].Value = item.HoraDeSalida?.ToString("HH:mm");
+                    worksheet.Cells[row, 4].Style.Font.Bold = false;
+
+                    // Col 5: Horas a Cubrir (Asegurándonos que sea un número)
                     worksheet.Cells[row, 5].Value = item.HorasACubrir;
+                    worksheet.Cells[row, 5].Style.Numberformat.Format = "0";
+                    worksheet.Cells[row, 5].Style.Font.Bold = false;
 
-                    // LÓGICA HORAS RESTANTES (Columna 6) - ¡Ahora sí calculará perfecto!
-                    int deudaTotal = item.Perfil?.HorasTotalesDeuda ?? 0;
-                    int acumuladas = item.Perfil?.HorasAcumuladasActuales ?? 0;
-                    worksheet.Cells[row, 6].Value = Math.Max(0, deudaTotal - acumuladas);
+                    // Col 6: ASISTIÓ (En el formato nuevo esta es la columna 6)
+                    worksheet.Cells[row, 6].Value = (item.Asistio == true) ? "SÍ" : "NO";
+                    worksheet.Cells[row, 6].Style.HorizontalAlignment = ExcelHorizontalAlignment.Center;
+                    worksheet.Cells[row, 6].Style.Font.Bold = false;
 
-                    worksheet.Cells[row, 7].Value = "SERVICIO COMUNITARIO";
-                    worksheet.Cells[row, 8].Value = "BANCO DE ALIMENTOS"; // Área
+                    // Col 7: FIRMA (La dejamos completamente en blanco para que firmen con pluma)
+                    worksheet.Cells[row, 7].Value = "";
+
+                    // Ya no escribimos NADA en la columna 8 porque no existe en este diseño
 
                     row++;
                     consecutivo++;
