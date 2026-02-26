@@ -229,27 +229,22 @@ namespace ProyectoVisitas.Controllers
         public class EvidenciaDto
         {
             public int PerfilId { get; set; }
-            public IFormFile Archivo { get; set; } // <--- Esto permite recibir el archivo real
+            public IFormFile Archivo { get; set; }
+            public DateOnly? FechaDelTrabajo { get; set; } // <--- EL NUEVO CAMPO QUE FALTABA
         }
 
-        // POST: api/Comunitario/subir-evidencia
         [HttpPost("subir-evidencia")]
         public async Task<IActionResult> SubirEvidencia([FromForm] EvidenciaDto datos)
         {
-            // 1. Validar que enviaron archivo
             if (datos.Archivo == null || datos.Archivo.Length == 0)
                 return BadRequest("No se ha enviado ningún archivo.");
 
-            // 2. Validar que el Perfil exista
             var perfil = await _context.ComunitarioPerfiles.FindAsync(datos.PerfilId);
             if (perfil == null) return NotFound("El perfil indicado no existe.");
 
-            // 3. GUARDAR EL ARCHIVO EN EL SERVIDOR
-            // Ruta: wwwroot/evidencias
             var carpeta = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "evidencias");
             if (!Directory.Exists(carpeta)) Directory.CreateDirectory(carpeta);
 
-            // Generar nombre único (ej: documento_5_guid.pdf) para no sobrescribir
             string extension = Path.GetExtension(datos.Archivo.FileName);
             string nombreArchivo = $"evidencia_{datos.PerfilId}_{Guid.NewGuid()}{extension}";
             string rutaCompleta = Path.Combine(carpeta, nombreArchivo);
@@ -259,23 +254,20 @@ namespace ProyectoVisitas.Controllers
                 await datos.Archivo.CopyToAsync(stream);
             }
 
-            // 4. GUARDAR EN LA BASE DE DATOS
+            // Magia: Si mandan fecha usamos esa, si no, usamos la de hoy por defecto.
+            DateOnly fechaCarga = datos.FechaDelTrabajo ?? DateOnly.FromDateTime(DateTime.Now);
+
             var nuevaEvidencia = new ComunitarioEvidencia
             {
                 PerfilId = datos.PerfilId,
-                UrlDocumento = "/evidencias/" + nombreArchivo, // Guardamos la ruta relativa
-                FechaCarga = DateOnly.FromDateTime(DateTime.Now)
+                UrlDocumento = "/evidencias/" + nombreArchivo,
+                FechaCarga = fechaCarga // <--- GUARDAMOS LA FECHA REAL
             };
 
             _context.ComunitarioEvidencias.Add(nuevaEvidencia);
             await _context.SaveChangesAsync();
 
-            return Ok(new
-            {
-                message = "Evidencia subida correctamente",
-                id = nuevaEvidencia.IdEvidencias,
-                url = nuevaEvidencia.UrlDocumento
-            });
+            return Ok(new { message = "Evidencia subida correctamente", url = nuevaEvidencia.UrlDocumento });
         }
 
 
@@ -359,36 +351,32 @@ namespace ProyectoVisitas.Controllers
         }
 
         // ==========================================
-        // 8. DESCARGAR REPORTE DIARIO EXCEL
+        // 8. GENERAR REPORTE EXCEL (Con Evidencias y Firmas)
         // ==========================================
-        // GET: api/Comunitario/reporte-diario
-        [HttpGet("reporte-diario")]
-        public async Task<IActionResult> DescargarReporteDiario([FromQuery] string? fecha)
+        public class GenerarReporteDto
+        {
+            public DateOnly? Fecha { get; set; }
+            public IFormFile? FotoFirmas { get; set; } // Opcional (por si un día quieres el excel sin firmas)
+        }
+
+        [HttpPost("generar-reporte")]
+        public async Task<IActionResult> GenerarReporteDiario([FromForm] GenerarReporteDto datos)
         {
             try
             {
-                // Si no mandan fecha, usamos la de hoy
-                DateOnly fechaFiltro = string.IsNullOrEmpty(fecha)
-                    ? DateOnly.FromDateTime(DateTime.Today)
-                    : DateOnly.Parse(fecha);
+                DateOnly fechaFiltro = datos.Fecha ?? DateOnly.FromDateTime(DateTime.Today);
 
-                // Pedimos el archivo Excel ya armado a nuestro nuevo servicio
-                byte[] excelBytes = await _reportesService.GenerarReporteAsistenciaComunitariaAsync(fechaFiltro);
+                // Le mandamos la fecha y la foto al servicio
+                byte[] excelBytes = await _reportesService.GenerarReporteAsistenciaComunitariaAsync(fechaFiltro, datos.FotoFirmas);
 
                 string fileName = $"Reporte_Asistencia_{fechaFiltro:dd_MM_yyyy}.xlsx";
-
-                // Devolvemos el archivo directamente
                 return File(excelBytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", fileName);
-            }
-            catch (FileNotFoundException ex)
-            {
-                // Si alguien olvidó poner la plantilla en wwwroot/Templates
-                return StatusCode(500, ex.Message);
             }
             catch (Exception ex)
             {
                 return BadRequest($"Error al generar el reporte: {ex.Message}");
             }
         }
+
     }
 }
