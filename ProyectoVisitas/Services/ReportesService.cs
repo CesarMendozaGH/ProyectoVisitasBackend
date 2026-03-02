@@ -3,7 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Http; // <--- FALTABA ESTO PARA LAS IMÁGENES
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using OfficeOpenXml;
 using OfficeOpenXml.Style;
@@ -13,7 +13,6 @@ namespace ProyectoVisitas.Services
 {
     public interface IReportesService
     {
-        // <--- CAMBIO 1: Agregamos el parámetro aquí
         Task<byte[]> GenerarReporteAsistenciaComunitariaAsync(DateOnly fecha, IFormFile? fotoFirmas = null);
     }
 
@@ -28,7 +27,6 @@ namespace ProyectoVisitas.Services
             _env = env;
         }
 
-        // <--- CAMBIO 2: Agregamos el parámetro aquí también
         public async Task<byte[]> GenerarReporteAsistenciaComunitariaAsync(DateOnly fecha, IFormFile? fotoFirmas = null)
         {
             var asistencias = await _context.ComunitarioAsistencias
@@ -37,7 +35,6 @@ namespace ProyectoVisitas.Services
                 .OrderBy(a => a.HoraDeInicio)
                 .ToListAsync();
 
-            // <--- CAMBIO 3: Consultamos las fotos de ese día en la Base de Datos
             var evidencias = await _context.ComunitarioEvidencias
                 .Where(e => e.FechaCarga == fecha)
                 .ToListAsync();
@@ -60,6 +57,7 @@ namespace ProyectoVisitas.Services
                 int row = 4;
                 int consecutivo = 1;
 
+                // --- LLENADO DE LA TABLA ---
                 foreach (var item in asistencias)
                 {
                     worksheet.Cells[row, 1].Value = consecutivo;
@@ -85,16 +83,36 @@ namespace ProyectoVisitas.Services
                     consecutivo++;
                 }
 
-                // --- MAGIA 1: AÑADIR EVIDENCIAS DE LA BASE DE DATOS ---
+                // --- MAGIA 2: LA HOJA ESCANEADA (A LA DERECHA DE LA TABLA) ---
+                if (fotoFirmas != null && fotoFirmas.Length > 0)
+                {
+                    worksheet.Cells[3, 8, 3, 12].Merge = true;
+                    worksheet.Cells[3, 8].Style.Font.Bold = true;
+
+                    using (var ms = new MemoryStream())
+                    {
+                        await fotoFirmas.CopyToAsync(ms);
+                        ms.Position = 0;
+                        var pictureFirma = worksheet.Drawings.AddPicture("FotoFirmasEscaneada_" + Guid.NewGuid(), ms);
+                        pictureFirma.SetPosition(3, 10, 7, 10);
+                        pictureFirma.SetSize(350, 400);
+                    }
+                }
+
+                // --- MAGIA 1: LAS FOTOS DE EVIDENCIA (HASTA EL FONDO) ---
                 if (evidencias.Any())
                 {
-                    row += 2;
-                    worksheet.Cells[row, 1].Value = "EVIDENCIAS FOTOGRÁFICAS DEL TRABAJO:";
-                    worksheet.Cells[row, 1, row, 7].Merge = true;
+                    // Buscamos cuál es la última fila que tiene texto en tu plantilla (para no tapar las firmas del final)
+                    // Y le sumamos 3 filas más de margen hacia abajo, o mínimo la fila 28 si la tabla está muy vacía.
+                    int ultimaFilaPlantilla = worksheet.Dimension.End.Row;
+                    row = Math.Max(ultimaFilaPlantilla, 28) + 3;
+
+                   // worksheet.Cells[row, 1].Value = "EVIDENCIAS FOTOGRÁFICAS DEL TRABAJO:";
+                    worksheet.Cells[row, 1, row, 10].Merge = true;
                     worksheet.Cells[row, 1].Style.Font.Bold = true;
 
                     row += 1;
-                    worksheet.Row(row).Height = 120; // Hacemos la fila alta
+                    worksheet.Row(row).Height = 160; // Hacemos la fila alta para que quepan
 
                     int colImg = 0;
                     foreach (var ev in evidencias)
@@ -106,7 +124,7 @@ namespace ProyectoVisitas.Services
                         {
                             var picture = worksheet.Drawings.AddPicture($"Evidencia_{ev.IdEvidencias}_{Guid.NewGuid()}", new FileInfo(filePath));
                             picture.SetPosition(row - 1, 5, colImg, 5);
-                            picture.SetSize(150, 150);
+                            picture.SetSize(170, 170);
 
                             colImg += 2;
 
@@ -114,30 +132,9 @@ namespace ProyectoVisitas.Services
                             {
                                 colImg = 0;
                                 row++;
-                                worksheet.Row(row).Height = 120;
+                                worksheet.Row(row).Height = 150;
                             }
                         }
-                    }
-                }
-
-                // --- MAGIA 2: AÑADIR LA HOJA FÍSICA ESCANEADA QUE MANDASTE POR POST ---
-                if (fotoFirmas != null && fotoFirmas.Length > 0)
-                {
-                    row += 2;
-                    worksheet.Cells[row, 1].Value = "HOJA DE FIRMAS ESCANEADA OFICIAL:";
-                    worksheet.Cells[row, 1, row, 7].Merge = true;
-                    worksheet.Cells[row, 1].Style.Font.Bold = true;
-
-                    row += 1;
-                    worksheet.Row(row).Height = 400; // Fila gigante para la hoja
-
-                    using (var ms = new MemoryStream())
-                    {
-                        await fotoFirmas.CopyToAsync(ms);
-                        ms.Position = 0;
-                        var pictureFirma = worksheet.Drawings.AddPicture("FotoFirmasEscaneada_" + Guid.NewGuid(), ms);
-                        pictureFirma.SetPosition(row - 1, 5, 0, 5); // Inicia en la columna A
-                        pictureFirma.SetSize(600, 500); // Tamaño grande
                     }
                 }
 
