@@ -105,14 +105,14 @@ namespace ProyectoVisitas.Services
                     // Buscamos cuál es la última fila que tiene texto en tu plantilla (para no tapar las firmas del final)
                     // Y le sumamos 3 filas más de margen hacia abajo, o mínimo la fila 28 si la tabla está muy vacía.
                     int ultimaFilaPlantilla = worksheet.Dimension.End.Row;
-                    row = Math.Max(ultimaFilaPlantilla, 28) + 3;
+                    row = Math.Max(ultimaFilaPlantilla, 24);
 
-                   // worksheet.Cells[row, 1].Value = "EVIDENCIAS FOTOGRÁFICAS DEL TRABAJO:";
-                    worksheet.Cells[row, 1, row, 10].Merge = true;
+                    // worksheet.Cells[row, 1].Value = "EVIDENCIAS FOTOGRÁFICAS DEL TRABAJO:";
+                    worksheet.Cells[row, 1, row, 11].Merge = true;
                     worksheet.Cells[row, 1].Style.Font.Bold = true;
 
                     row += 1;
-                    worksheet.Row(row).Height = 160; // Hacemos la fila alta para que quepan
+                    worksheet.Row(row).Height = 260; // Hacemos la fila alta para que quepan
 
                     int colImg = 0;
                     foreach (var ev in evidencias)
@@ -124,15 +124,18 @@ namespace ProyectoVisitas.Services
                         {
                             var picture = worksheet.Drawings.AddPicture($"Evidencia_{ev.IdEvidencias}_{Guid.NewGuid()}", new FileInfo(filePath));
                             picture.SetPosition(row - 1, 5, colImg, 5);
-                            picture.SetSize(170, 170);
+                            picture.SetSize(300, 300);
 
-                            colImg += 2;
+                            // 1. EL CAMBIO CLAVE: Saltamos 5 columnas para darle espacio a los 300px
+                            colImg += 5;
 
-                            if (colImg >= 6)
+                            // 2. EL LÍMITE: Cuando llegue a la columna 10, lo bajamos de renglón
+                            // (Así caben exactamente 2 fotos gigantes por renglón: una en la col 0 y otra en la col 5)
+                            if (colImg >= 10)
                             {
                                 colImg = 0;
                                 row++;
-                                worksheet.Row(row).Height = 150;
+                                worksheet.Row(row).Height = 260; // Aseguramos que el nuevo renglón también sea alto
                             }
                         }
                     }
