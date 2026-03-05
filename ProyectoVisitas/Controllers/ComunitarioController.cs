@@ -378,5 +378,45 @@ namespace ProyectoVisitas.Controllers
             }
         }
 
+        // ==========================================
+        // 9. SUBIR FOTO DE ROSTRO
+        // ==========================================
+        public class FotoPerfilDto
+        {
+            public int PerfilId { get; set; }
+            public IFormFile Archivo { get; set; }
+        }
+
+        [HttpPost("subir-foto-rostro")]
+        public async Task<IActionResult> SubirFotoRostro([FromForm] FotoPerfilDto datos)
+        {
+            if (datos.Archivo == null || datos.Archivo.Length == 0)
+                return BadRequest("No se ha enviado ninguna imagen.");
+
+            var perfil = await _context.ComunitarioPerfiles.FindAsync(datos.PerfilId);
+            if (perfil == null) return NotFound("Perfil no encontrado.");
+
+            // Creamos una carpeta exclusiva para los rostros
+            var carpeta = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "perfiles");
+            if (!Directory.Exists(carpeta)) Directory.CreateDirectory(carpeta);
+
+            string extension = Path.GetExtension(datos.Archivo.FileName);
+            string nombreArchivo = $"perfil_{datos.PerfilId}_{Guid.NewGuid()}{extension}";
+            string rutaCompleta = Path.Combine(carpeta, nombreArchivo);
+
+            using (var stream = new FileStream(rutaCompleta, FileMode.Create))
+            {
+                await datos.Archivo.CopyToAsync(stream);
+            }
+
+            // Actualizamos el campo de la URL en la base de datos
+            perfil.UrlFotoRostro = "/perfiles/" + nombreArchivo;
+
+            _context.ComunitarioPerfiles.Update(perfil);
+            await _context.SaveChangesAsync();
+
+            return Ok(new { message = "Foto subida correctamente", url = perfil.UrlFotoRostro });
+        }
+
     }
 }
