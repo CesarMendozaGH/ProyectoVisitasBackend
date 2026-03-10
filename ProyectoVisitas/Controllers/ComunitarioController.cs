@@ -49,27 +49,54 @@ namespace ProyectoVisitas.Controllers
         // ==========================================
         // 2. CREAR NUEVO PERFIL (Alta de Infractor)
         // ==========================================
-        [HttpPost("crear-perfil")]
-        public async Task<ActionResult> CrearPerfil([FromBody] ComunitarioPerfile perfil)
+
+        public class PerfilConFotoDto
         {
-            // 1. NUEVA VALIDACIÓN: Por Nombre y Apellidos
-            // Verificamos si ya existe alguien con el mismo Nombre y Apellido Paterno exactos.
-            // (Opcional: puedes incluir el Materno también si quieres ser más estricto)
+            public int IdPerfilComunitario { get; set; } // 0 para crear, ID real para editar
+            public string Nombre { get; set; }
+            public string ApellidoPaterno { get; set; }
+            public string? ApellidoMaterno { get; set; }
+            public int HorasTotalesDeuda { get; set; }
+            public int HorasAcumuladasActuales { get; set; }
+            public IFormFile? FotoRostro { get; set; } // Puede ser nulo si no suben foto
+        }
 
+        [HttpPost("crear-perfil")]
+        public async Task<ActionResult> CrearPerfil([FromForm] PerfilConFotoDto dto)
+        {
+            // Validación Anti-Duplicados
             bool existe = await _context.ComunitarioPerfiles
-                .AnyAsync(p => p.Nombre == perfil.Nombre
-                            && p.ApellidoPaterno == perfil.ApellidoPaterno
-                            && p.ApellidoMaterno == perfil.ApellidoMaterno); // Opcional
+                .AnyAsync(p => p.Nombre == dto.Nombre && p.ApellidoPaterno == dto.ApellidoPaterno);
 
-            if (existe)
+            if (existe) return BadRequest($"Ya existe un perfil a nombre de {dto.Nombre} {dto.ApellidoPaterno}.");
+
+            var perfil = new ComunitarioPerfile
             {
-                return BadRequest($"Ya existe un perfil registrado a nombre de {perfil.Nombre} {perfil.ApellidoPaterno}.");
-            }
+                Nombre = dto.Nombre,
+                ApellidoPaterno = dto.ApellidoPaterno,
+                ApellidoMaterno = dto.ApellidoMaterno,
+                HorasTotalesDeuda = dto.HorasTotalesDeuda,
+                HorasAcumuladasActuales = 0,
+                FechaRegistro = DateOnly.FromDateTime(DateTime.Now),
+                EstatusServicio = "ACTIVO"
+            };
 
-            // 2. Inicializar valores (Igual que antes)
-            perfil.HorasAcumuladasActuales = 0;
-            perfil.FechaRegistro = DateOnly.FromDateTime(DateTime.Now);
-            perfil.EstatusServicio = "ACTIVO";
+            // GUARDAR LA FOTO SI LA ENVIARON
+            if (dto.FotoRostro != null && dto.FotoRostro.Length > 0)
+            {
+                var carpeta = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "perfiles");
+                if (!Directory.Exists(carpeta)) Directory.CreateDirectory(carpeta);
+
+                string extension = Path.GetExtension(dto.FotoRostro.FileName);
+                string nombreArchivo = $"perfil_{Guid.NewGuid()}{extension}";
+                string rutaCompleta = Path.Combine(carpeta, nombreArchivo);
+
+                using (var stream = new FileStream(rutaCompleta, FileMode.Create))
+                {
+                    await dto.FotoRostro.CopyToAsync(stream);
+                }
+                perfil.UrlFotoRostro = "/perfiles/" + nombreArchivo;
+            }
 
             _context.ComunitarioPerfiles.Add(perfil);
             await _context.SaveChangesAsync();
@@ -286,40 +313,41 @@ namespace ProyectoVisitas.Controllers
         }
 
 
-        // ==========================================
-        // 6. MODIFICAR PERFIL (Corregir datos)
-        // ==========================================
-        // PUT: api/Comunitario/modificar-perfil/{id}
         [HttpPut("modificar-perfil/{id}")]
-        public async Task<IActionResult> ModificarPerfil(int id, [FromBody] ComunitarioPerfile perfilModificado)
+        public async Task<IActionResult> ModificarPerfil(int id, [FromForm] PerfilConFotoDto dto)
         {
-            if (id != perfilModificado.IdPerfilComunitario)
-                return BadRequest("El ID de la URL no coincide con el cuerpo.");
+            if (id != dto.IdPerfilComunitario) return BadRequest("El ID no coincide.");
 
             var perfilExistente = await _context.ComunitarioPerfiles.FindAsync(id);
             if (perfilExistente == null) return NotFound("Perfil no encontrado.");
 
-            // Actualizamos solo los campos permitidos
-            perfilExistente.Nombre = perfilModificado.Nombre;
-            perfilExistente.ApellidoPaterno = perfilModificado.ApellidoPaterno;
-            perfilExistente.ApellidoMaterno = perfilModificado.ApellidoMaterno;
-            perfilExistente.HorasTotalesDeuda = perfilModificado.HorasTotalesDeuda;
-            //por cualquier cosa requerida
-            perfilExistente.HorasAcumuladasActuales = perfilModificado.HorasAcumuladasActuales;
-            // Opcional: Si quieres permitir cambiar la foto también
-            perfilExistente.UrlFotoRostro = perfilModificado.UrlFotoRostro;
+            perfilExistente.Nombre = dto.Nombre;
+            perfilExistente.ApellidoPaterno = dto.ApellidoPaterno;
+            perfilExistente.ApellidoMaterno = dto.ApellidoMaterno;
+            perfilExistente.HorasTotalesDeuda = dto.HorasTotalesDeuda;
+            perfilExistente.HorasAcumuladasActuales = dto.HorasAcumuladasActuales;
 
+            // ACTUALIZAR LA FOTO SI ENVIARON UNA NUEVA
+            if (dto.FotoRostro != null && dto.FotoRostro.Length > 0)
+            {
+                var carpeta = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "perfiles");
+                if (!Directory.Exists(carpeta)) Directory.CreateDirectory(carpeta);
 
-            try
-            {
-                await _context.SaveChangesAsync();
-                return Ok(new { message = "Perfil actualizado correctamente." });
+                string extension = Path.GetExtension(dto.FotoRostro.FileName);
+                string nombreArchivo = $"perfil_{id}_{Guid.NewGuid()}{extension}";
+                string rutaCompleta = Path.Combine(carpeta, nombreArchivo);
+
+                using (var stream = new FileStream(rutaCompleta, FileMode.Create))
+                {
+                    await dto.FotoRostro.CopyToAsync(stream);
+                }
+                perfilExistente.UrlFotoRostro = "/perfiles/" + nombreArchivo;
             }
-            catch (DbUpdateConcurrencyException)
-            {
-                return StatusCode(500, "Error de concurrencia al actualizar.");
-            }
+
+            await _context.SaveChangesAsync();
+            return Ok(new { message = "Perfil actualizado correctamente." });
         }
+
 
         // ==========================================
         // 7. DESACTIVAR / REACTIVAR (Borrado Lógico)

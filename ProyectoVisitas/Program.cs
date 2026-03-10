@@ -50,4 +50,6 @@ app.UseCors("NuevaPolitica");
 app.UseAuthorization();
 app.MapControllers();
 
+app.UseStaticFiles(); // Esto permite a .NET exponer la carpeta wwwroot al exterior
+
 app.Run();

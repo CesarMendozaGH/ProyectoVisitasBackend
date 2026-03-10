@@ -24,6 +24,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Folder Include="wwwroot\perfiles\" />
     <Folder Include="wwwroot\Temp\" />
     <Folder Include="wwwroot\Templates\" />
     <Folder Include="wwwroot\Uploads\Firmas\" />
