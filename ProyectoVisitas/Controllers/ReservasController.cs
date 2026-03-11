@@ -109,12 +109,27 @@ namespace ProyectoVisitas.Controllers
                 return BadRequest();
             }
 
-            // OJO: Si cambian la fecha aquí, deberías volver a correr la validación de conflictos.
-            // Por simplicidad, aquí solo guardamos.
+            // --- VALIDACIÓN 1: Fechas lógicas en EDICIÓN ---
+            if (reserva.FechaInicio >= reserva.FechaFin)
+            {
+                return BadRequest("La fecha de fin debe ser posterior a la de inicio.");
+            }
+
+            // --- VALIDACIÓN 2: Evitar conflictos al editar (Opcional pero recomendado) ---
+            bool estaOcupado = await _context.Reservas.AnyAsync(r =>
+                r.EspacioId == reserva.EspacioId &&
+                r.IdReserva != id && // Excluimos la reserva actual para que no choque consigo misma
+                r.EstatusReserva == true &&
+                r.FechaInicio < reserva.FechaFin &&
+                r.FechaFin > reserva.FechaInicio
+            );
+
+            if (estaOcupado)
+            {
+                return Conflict("El espacio seleccionado ya está ocupado en ese horario.");
+            }
 
             _context.Entry(reserva).State = EntityState.Modified;
-
-            // Protegemos campos críticos
             _context.Entry(reserva).Property(x => x.IdBitacoraGeneral).IsModified = false;
             _context.Entry(reserva).Property(x => x.CreatedAt).IsModified = false;
 
@@ -127,25 +142,6 @@ namespace ProyectoVisitas.Controllers
                 if (!ReservaExists(id)) return NotFound();
                 else throw;
             }
-
-            return NoContent();
-        }
-
-        // Cancelacion CancelacionBinaria
-        [HttpDelete("{id}/Cancelacion")]
-        public async Task<IActionResult> Cancelar(int id)
-        {
-            var reserva = await _context.Reservas.FindAsync(id);
-            if (reserva == null)
-            {
-                return NotFound();
-            }
-
-            
-            reserva.EstatusReserva = false;
-
-
-            await _context.SaveChangesAsync();
 
             return NoContent();
         }
@@ -257,6 +253,29 @@ namespace ProyectoVisitas.Controllers
             await _context.SaveChangesAsync();
 
             return Ok(new { message = $"Se marcó asistencia a {asistentes.Count} personas." });
+        }
+
+
+
+        //BORRAR ASISTENTES POS SI SE EQUIVOCAN UNA VEZ EN LA LISTA
+        [HttpDelete("Asistentes/{idAsistente}")]
+        public async Task<IActionResult> EliminarAsistente(int idAsistente)
+        {
+            var asistente = await _context.ReservasListaAsistentes.FindAsync(idAsistente);
+            if (asistente == null) return NotFound("El asistente no existe.");
+
+            // Buscamos a qué reserva pertenece
+            var reserva = await _context.Reservas.FindAsync(asistente.IdReservaFk);
+
+            // 🔒 CANDADO BACKEND: La fecha ya pasó
+            if (reserva != null && reserva.FechaFin < DateTime.Now)
+            {
+                return BadRequest("La reserva ya finalizó. La lista de asistencia es oficial y no puede ser modificada.");
+            }
+
+            _context.ReservasListaAsistentes.Remove(asistente);
+            await _context.SaveChangesAsync();
+            return Ok(new { message = "Asistente eliminado correctamente." });
         }
 
         private bool ReservaExists(int id)
