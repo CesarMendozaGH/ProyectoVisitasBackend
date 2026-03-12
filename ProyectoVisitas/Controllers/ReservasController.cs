@@ -151,26 +151,26 @@ namespace ProyectoVisitas.Controllers
         [HttpPost("{id}/asistentes")]
         public async Task<IActionResult> AgregarAsistentesMasivos(int id, [FromBody] List<ReservasListaAsistente> listaAsistentes)
         {
-
-            //Validacion de lista vacia
-            if (listaAsistentes == null || listaAsistentes.Count == 0) {
+            if (listaAsistentes == null || listaAsistentes.Count == 0)
+            {
                 return BadRequest("La lista de asistentes esta vacia");
             }
 
-            //Verificar resera
-            var reservaExiste = await _context.Reservas.AnyAsync(r=> r.IdReserva == id);
-              if(!reservaExiste) return NotFound("La reserva no existe");
+            // Buscamos la reserva completa para poder leer su FechaFin
+            var reserva = await _context.Reservas.FindAsync(id);
+            if (reserva == null) return NotFound("La reserva no existe");
 
-            // 3. PREPARACIÓN DE DATOS
-            // Como el Front manda el objeto "crudo", nosotros completamos lo que falta
+            // 🔒 CANDADO BACKEND: Evitar agregar asistentes si la junta ya terminó
+            if (reserva.FechaFin < DateTime.Now)
+            {
+                return BadRequest("La reserva ya finalizó. No se pueden agregar nuevos asistentes a la lista oficial.");
+            }
+
             foreach (var asistente in listaAsistentes)
             {
-                // El front NO sabe el ID de la reserva (o puede mentir), 
-                // así que lo forzamos con el ID de la URL
                 asistente.IdReservaFk = id;
-
-                asistente.IdLista = 0; // Ignoramos cualquier ID que manden
-                asistente.Asistio = false; // Nace como "No ha llegado"
+                asistente.IdLista = 0;
+                asistente.Asistio = false;
                 asistente.CreatedAt = DateTime.Now;
             }
 
@@ -178,7 +178,6 @@ namespace ProyectoVisitas.Controllers
             await _context.SaveChangesAsync();
 
             return Ok(new { message = $"Se guardaron {listaAsistentes.Count} asistentes correctamente." });
-
         }
 
         //Rellenar lista de asistencia 
@@ -206,13 +205,17 @@ namespace ProyectoVisitas.Controllers
         public async Task<IActionResult> MarcarAsistencia(int idAsistente)
         {
             var asistente = await _context.ReservasListaAsistentes.FindAsync(idAsistente);
-
             if (asistente == null) return NotFound("Asistente no encontrado");
 
-            // Invertimos el valor: Si era false pasa a true, y viceversa (por si se equivocaron)
-            asistente.Asistio = !asistente.Asistio;
+            var reserva = await _context.Reservas.FindAsync(asistente.IdReservaFk);
 
-            // Guardamos solo ese cambio
+            // 🔒 CANDADO BACKEND: No se puede cambiar la asistencia si ya terminó
+            if (reserva != null && reserva.FechaFin < DateTime.Now)
+            {
+                return BadRequest("La reserva ya finalizó. El registro de asistencia quedó sellado y no puede modificarse.");
+            }
+
+            asistente.Asistio = !asistente.Asistio;
             await _context.SaveChangesAsync();
 
             return Ok(new
@@ -232,8 +235,6 @@ namespace ProyectoVisitas.Controllers
                 return BadRequest("No seleccionaste a nadie.");
             }
 
-            // 1. Buscamos en la BD todos los asistentes cuyo ID esté en la lista que mandaste
-            // SQL equivalente: WHERE idLista IN (1, 5, 8, ...)
             var asistentes = await _context.ReservasListaAsistentes
                                            .Where(a => idsAsistentesConfirmados.Contains(a.IdLista))
                                            .ToListAsync();
@@ -243,13 +244,21 @@ namespace ProyectoVisitas.Controllers
                 return NotFound("No se encontraron asistentes con esos IDs.");
             }
 
-            // 2. Recorremos los resultados y les ponemos Asistio = true
+            // Buscamos la reserva a la que pertenecen (tomamos el ID del primer asistente)
+            var idReserva = asistentes.First().IdReservaFk;
+            var reserva = await _context.Reservas.FindAsync(idReserva);
+
+            // 🔒 CANDADO BACKEND
+            if (reserva != null && reserva.FechaFin < DateTime.Now)
+            {
+                return BadRequest("La reserva ya finalizó. El registro de asistencia quedó sellado y no puede modificarse.");
+            }
+
             foreach (var asistente in asistentes)
             {
                 asistente.Asistio = true;
             }
 
-            // 3. Guardamos TODO de un solo golpe
             await _context.SaveChangesAsync();
 
             return Ok(new { message = $"Se marcó asistencia a {asistentes.Count} personas." });
@@ -257,17 +266,21 @@ namespace ProyectoVisitas.Controllers
 
 
 
-        //BORRAR ASISTENTES POS SI SE EQUIVOCAN UNA VEZ EN LA LISTA
+        // DELETE: api/Reservas/Asistentes/5
+        // Sirve para: Eliminar a un asistente, excepto si la junta ya terminó.
         [HttpDelete("Asistentes/{idAsistente}")]
         public async Task<IActionResult> EliminarAsistente(int idAsistente)
         {
             var asistente = await _context.ReservasListaAsistentes.FindAsync(idAsistente);
-            if (asistente == null) return NotFound("El asistente no existe.");
+            if (asistente == null)
+            {
+                return NotFound("El asistente no existe o ya fue eliminado.");
+            }
 
-            // Buscamos a qué reserva pertenece
+            // Buscamos a qué reserva pertenece este asistente
             var reserva = await _context.Reservas.FindAsync(asistente.IdReservaFk);
 
-            // 🔒 CANDADO BACKEND: La fecha ya pasó
+            // 🔒 CANDADO BACKEND: Validamos si la fecha y hora de la reserva ya pasó
             if (reserva != null && reserva.FechaFin < DateTime.Now)
             {
                 return BadRequest("La reserva ya finalizó. La lista de asistencia es oficial y no puede ser modificada.");
@@ -275,8 +288,32 @@ namespace ProyectoVisitas.Controllers
 
             _context.ReservasListaAsistentes.Remove(asistente);
             await _context.SaveChangesAsync();
+
             return Ok(new { message = "Asistente eliminado correctamente." });
         }
+
+        // DELETE: api/Reservas/5/Cancelacion
+        [HttpDelete("{id}/Cancelacion")]
+        public async Task<IActionResult> CancelarReserva(int id)
+        {
+            var reserva = await _context.Reservas.FindAsync(id);
+
+            if (reserva == null)
+            {
+                return NotFound("La reserva no existe o ya fue eliminada.");
+            }
+
+            if (reserva.FechaFin < DateTime.Now)
+            {
+                return BadRequest("No puedes cancelar una reserva que ya finalizó.");
+            }
+
+            reserva.EstatusReserva = false;
+            await _context.SaveChangesAsync();
+
+            return Ok(new { message = "Reserva cancelada correctamente." });
+        }
+
 
         private bool ReservaExists(int id)
         {
