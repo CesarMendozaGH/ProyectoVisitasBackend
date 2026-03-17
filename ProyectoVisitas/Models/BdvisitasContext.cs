@@ -31,7 +31,8 @@ public partial class BdvisitasContext : DbContext
 
     public virtual DbSet<VisitasBitacora> VisitasBitacoras { get; set; }
 
-    
+    public virtual DbSet<UsuarioWeb> UsuariosWebs { get; set; }
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<BitacoraGeneralAcceso>(entity =>
