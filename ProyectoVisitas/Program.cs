@@ -1,7 +1,8 @@
 using Microsoft.AspNetCore.Authentication.JwtBearer;
-using Microsoft.IdentityModel.Tokens;
 using Microsoft.EntityFrameworkCore;
-using OfficeOpenXml; 
+using Microsoft.IdentityModel.Tokens;
+using Microsoft.OpenApi;
+using OfficeOpenXml;
 using ProyectoVisitas.Models;
 using ProyectoVisitas.Services;
 using System.Text;
@@ -28,8 +29,9 @@ builder.Services.AddCors(options =>
 // Servicios
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
 
+// Solo deja esto en tu Program.cs, quita todo lo de SecurityScheme
+builder.Services.AddSwaggerGen();
 //builder para excel
 builder.Services.AddScoped<IReportesService, ReportesService>();
 
