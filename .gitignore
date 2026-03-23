@@ -361,3 +361,14 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+# Ignorar contenido dinámico generado por los usuarios
+wwwroot/perfiles/*
+wwwroot/evidencias/*
+wwwroot/Temp/*
+wwwroot/Uploads/
+
+# Mantener las carpetas en Git pero vacías (opcional)
+!wwwroot/perfiles/.gitkeep
+!wwwroot/evidencias/.gitkeep
+!wwwroot/Templates/
