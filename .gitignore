@@ -362,13 +362,16 @@ MigrationBackup/
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
 
-# Ignorar contenido dinámico generado por los usuarios
-wwwroot/perfiles/*
-wwwroot/evidencias/*
-wwwroot/Temp/*
-wwwroot/Uploads/
+# Ignorar el contenido de las carpetas de wwwroot
+ProyectoVisitas/wwwroot/perfiles/*
+ProyectoVisitas/wwwroot/evidencias/*
+ProyectoVisitas/wwwroot/Temp/*
+ProyectoVisitas/wwwroot/Uploads/
 
-# Mantener las carpetas en Git pero vacías (opcional)
-!wwwroot/perfiles/.gitkeep
-!wwwroot/evidencias/.gitkeep
-!wwwroot/Templates/
+# EXCEPCIONES: No ignorar los archivos .gitkeep
+!ProyectoVisitas/wwwroot/perfiles/.gitkeep
+!ProyectoVisitas/wwwroot/evidencias/.gitkeep
+!ProyectoVisitas/wwwroot/Temp/.gitkeep
+
+# No ignorar la carpeta de plantillas (necesaria para ReportesService.cs)
+!ProyectoVisitas/wwwroot/Templates/

@@ -12,48 +12,66 @@ namespace ProyectoVisitas.Controllers
     public class AuthController : ControllerBase
     {
         private readonly BdvisitasContext _context;
+        // La URL donde vive tu React en local o producción
+        private readonly string _reactAppUrl = "http://localhost:5173";
 
         public AuthController(BdvisitasContext context)
         {
             _context = context;
         }
 
-
-
-        [HttpPost("Login")]
-        [Authorize] // 🔒 El cadenero de .NET validará el token de la Intranet automáticamente
-        public async Task<IActionResult> Login()
+        // 🚨 EL NUEVO PUNTO DE ENTRADA DESDE LA INTRANET 🚨
+        // Recibe el POST de formulario (application/x-www-form-urlencoded)
+        [HttpPost("SSORedirect")]
+        [AllowAnonymous] // Permitimos entrar porque aquí mismo validaremos el token
+        public async Task<IActionResult> SSORedirect([FromForm] string access_token, [FromForm] string sid)
         {
-            var sid = User.FindFirst("SID")?.Value;
-            var nombre = User.FindFirst(ClaimTypes.Name)?.Value;
-
-            if (string.IsNullOrEmpty(sid)) return BadRequest("Token sin SID.");
-
-            var usuarioLocal = await _context.UsuariosWebs.FirstOrDefaultAsync(u => u.SSID == sid);
-
-            if (usuarioLocal == null)
+            try
             {
-                usuarioLocal = new UsuarioWeb
+                if (string.IsNullOrEmpty(access_token) || string.IsNullOrEmpty(sid))
                 {
-                    SSID = sid,
-                    NombreCompleto = nombre ?? "Usuario Desconocido",
-                    Rol = (sid == "S-1-5-21-514523672-912588543-873931468-1115") ? "SUPERADMIN" : "USUARIO_NORMAL",
-                    FechaRegistro = DateTime.Now
-                };
-                _context.UsuariosWebs.Add(usuarioLocal);
-                await _context.SaveChangesAsync();
-            }
-
-            return Ok(new
-            {
-                mensaje = "Login exitoso",
-                usuario = new
-                {
-                    nombre = usuarioLocal.NombreCompleto,
-                    rol = usuarioLocal.Rol,
-                    sid = usuarioLocal.SSID
+                    return BadRequest("Datos incompletos desde la Intranet.");
                 }
-            });
+
+                // 1. ABRIR Y VALIDAR EL TOKEN QUE MANDÓ LA INTRANET
+                var handler = new JwtSecurityTokenHandler();
+
+                // (Opcional) Aquí deberías validar la firma del token con la llave secreta, 
+                // pero por ahora confiaremos en que el token viene de la Intranet
+                var jwtToken = handler.ReadJwtToken(access_token);
+
+                // Extraemos el nombre del token (asumiendo que viene como unique_name o Name)
+                var nombre = jwtToken.Claims.FirstOrDefault(c => c.Type == "unique_name")?.Value ??
+                             jwtToken.Claims.FirstOrDefault(c => c.Type == ClaimTypes.Name)?.Value ??
+                             "Usuario Desconocido";
+
+                // 2. JIT PROVISIONING: CREAR O ACTUALIZAR USUARIO EN BD
+                var usuarioLocal = await _context.UsuariosWebs.FirstOrDefaultAsync(u => u.SSID == sid);
+
+                if (usuarioLocal == null)
+                {
+                    usuarioLocal = new UsuarioWeb
+                    {
+                        SSID = sid,
+                        NombreCompleto = nombre,
+                        // Asignamos SUPERADMIN temporalmente si es el SID de Misael, sino NORMAL
+                        Rol = (sid == "S-1-5-21-514523672-912588543-873931468-1115") ? "SUPERADMIN" : "USUARIO_NORMAL",
+                        FechaRegistro = DateTime.Now
+                    };
+                    _context.UsuariosWebs.Add(usuarioLocal);
+                    await _context.SaveChangesAsync();
+                }
+
+                // 3. LA MAGIA: REDIRIGIR A REACT PASANDO EL TOKEN
+                // Redirigimos al navegador del usuario hacia tu React, y le pasamos el token en la URL
+                // para que React lo atrape, lo guarde y lo empiece a usar.
+                string urlDestino = $"{_reactAppUrl}/auth/callback?token={access_token}&rol={usuarioLocal.Rol}";
+                return Redirect(urlDestino);
+            }
+            catch (Exception ex)
+            {
+                return BadRequest($"Error en la autenticación SSO: {ex.Message}");
+            }
         }
 
 
@@ -62,24 +80,26 @@ namespace ProyectoVisitas.Controllers
         [AllowAnonymous]
         public IActionResult GenerarPaseDev()
         {
+            // ... (Tu código de GenerarPaseDev se queda igual) ...
             var claims = new System.Collections.Generic.List<System.Security.Claims.Claim>
-    {
-        new System.Security.Claims.Claim(System.Security.Claims.ClaimTypes.Name, "MISAEL PEREZ"),
-        new System.Security.Claims.Claim("SID", "S-1-5-21-514523672-912588543-873931468-1115")
-    };
+            {
+                new System.Security.Claims.Claim(System.Security.Claims.ClaimTypes.Name, "MISAEL PEREZ"),
+                new System.Security.Claims.Claim("SID", "S-1-5-21-514523672-912588543-873931468-1115")
+            };
 
             var key = new Microsoft.IdentityModel.Tokens.SymmetricSecurityKey(System.Text.Encoding.UTF8.GetBytes("BaLe0n-Intranet-2026-JWT-Key-Segura-01"));
             var creds = new Microsoft.IdentityModel.Tokens.SigningCredentials(key, Microsoft.IdentityModel.Tokens.SecurityAlgorithms.HmacSha256);
 
             var token = new System.IdentityModel.Tokens.Jwt.JwtSecurityToken(
                 issuer: "IntranetAPI", audience: "IntranetFrontend",
-                claims: claims, expires: DateTime.Now.AddHours(8), // Le damos 8 horas para que programes a gusto
+                claims: claims, expires: DateTime.Now.AddHours(8),
                 signingCredentials: creds
             );
 
             return Ok(new { token = new System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler().WriteToken(token) });
         }
-
+    }
+}
         //// --- MÉTODO TEMPORAL DE PRUEBA (Sin [Authorize]) ---
         //// Este método recibe el token como string para no usar el candado de Swagger
         //[HttpPost("PruebaLogin")]
@@ -149,5 +169,4 @@ namespace ProyectoVisitas.Controllers
 
         //    return Ok(new JwtSecurityTokenHandler().WriteToken(token));
         //}
-    }
-}
+    

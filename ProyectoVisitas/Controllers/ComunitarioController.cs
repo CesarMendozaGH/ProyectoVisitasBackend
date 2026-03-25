@@ -190,16 +190,12 @@ namespace ProyectoVisitas.Controllers
          */
 
 
-        
+
         // PUT: api/Comunitario/check-out-por-perfil/{perfilId}
         [HttpPut("check-out-por-perfil/{perfilId}")]
         public async Task<IActionResult> CheckOutPorPerfil(int perfilId)
         {
             // 1. BUSCAR LA VISITA ABIERTA DE HOY
-            // Buscamos: 
-            // - Que sea de este Perfil
-            // - Que sea fecha de HOY
-            // - Que NO tenga hora de salida (o sea, que siga adentro)
             DateOnly hoy = DateOnly.FromDateTime(DateTime.Now);
 
             var asistencia = await _context.ComunitarioAsistencias
@@ -213,27 +209,46 @@ namespace ProyectoVisitas.Controllers
                 return NotFound($"No se encontró una entrada abierta para el Perfil {perfilId} el día de hoy.");
             }
 
-            // 2. MARCAR SALIDA
-            TimeOnly horaActual = TimeOnly.FromDateTime(DateTime.Now);
+            // --- 2. REGLA DE NEGOCIO: REDONDEO AMIGABLE DE SALIDA ---
+            DateTime ahora = DateTime.Now;
+
+            // Si los minutos de salida están entre 45 y 59, redondeamos hacia la siguiente hora.
+            if (ahora.Minute >= 45)
+            {
+                int minutosFaltantes = 60 - ahora.Minute;
+                ahora = ahora.AddMinutes(minutosFaltantes);
+            }
+
+            // Convertimos la hora ajustada a TimeOnly y limpiamos los segundos (ej. 10:00:00)
+            TimeOnly horaActual = new TimeOnly(ahora.Hour, ahora.Minute, 0);
+            // --------------------------------------------------------
+
+            // MARCAR SALIDA
             asistencia.HoraDeSalida = horaActual;
 
             // 3. CALCULAR HORAS REALES TRABAJADAS
             // Restamos Salida - Entrada
+            // Restamos Salida - Entrada
             TimeSpan duracion = horaActual - asistencia.HoraDeInicio;
+
+            // Convertimos la diferencia a horas enteras
             int horasRealizadas = (int)duracion.TotalHours;
 
-            // Ojo: Aquí NO sobreescribimos 'HorasACubrir' porque ese fue el compromiso manual al llegar.
-            // Si quieres saber cuánto CUMPLIÓ vs cuánto PROMETIÓ, podrías guardar esto en otro campo, 
-            // pero por ahora solo sumamos lo real al acumulado.
+            // Protección por si hay error de reloj (ej. salieron un minuto antes de entrar por error del sistema)
+            if (horasRealizadas < 0) horasRealizadas = 0;
 
-            if (horasRealizadas < 0) horasRealizadas = 0; // Protección por si hay error de reloj
-
+            
+            // REGLA DE NEGOCIO: TOPE SEGÚN LO PROMETIDO
+            // Topamos las horas a lo que prometió al registrar la entrada
+            if (horasRealizadas > asistencia.HorasACubrir)
+            {
+                horasRealizadas = asistencia.HorasACubrir;
+            }
             // 4. ACTUALIZAR AL PERFIL (Abonar a la deuda)
             var perfil = await _context.ComunitarioPerfiles.FindAsync(perfilId);
             if (perfil != null)
             {
                 perfil.HorasAcumuladasActuales = (perfil.HorasAcumuladasActuales ?? 0) + horasRealizadas;
-                _context.ComunitarioPerfiles.Update(perfil);
             }
 
             await _context.SaveChangesAsync();
@@ -242,7 +257,7 @@ namespace ProyectoVisitas.Controllers
             {
                 message = "Salida registrada exitosamente",
                 nombre = $"{asistencia.Nombre} {asistencia.ApellidoPaterno}",
-                horaSalida = horaActual,
+                horaSalida = horaActual.ToString("HH:mm"), // Se lo mandamos formateado al Frontend
                 horasSumadas = horasRealizadas,
                 totalAcumulado = perfil?.HorasAcumuladasActuales
             });
