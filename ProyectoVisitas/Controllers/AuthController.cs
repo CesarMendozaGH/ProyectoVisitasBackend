@@ -1,9 +1,12 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
 using ProyectoVisitas.Models;
-using System.Security.Claims;
 using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Text;
+using Microsoft.Extensions.Configuration;
 
 namespace ProyectoVisitas.Controllers
 {
@@ -12,18 +15,21 @@ namespace ProyectoVisitas.Controllers
     public class AuthController : ControllerBase
     {
         private readonly BdvisitasContext _context;
-        // La URL donde vive tu React en local o producción
+
+        // 2. DECLARAS LA VARIABLE DE CONFIGURACIÓN AQUÍ
+        private readonly IConfiguration _configuration;
+
         private readonly string _reactAppUrl = "http://localhost:5173";
 
-        public AuthController(BdvisitasContext context)
+        // 3. AGREGAS IConfiguration AL CONSTRUCTOR
+        public AuthController(BdvisitasContext context, IConfiguration configuration)
         {
             _context = context;
+            _configuration = configuration; // <-- 4. Lo asignas para poder usarlo en tus métodos
         }
 
-        // 🚨 EL NUEVO PUNTO DE ENTRADA DESDE LA INTRANET 🚨
-        // Recibe el POST de formulario (application/x-www-form-urlencoded)
         [HttpPost("SSORedirect")]
-        [AllowAnonymous] // Permitimos entrar porque aquí mismo validaremos el token
+        [AllowAnonymous]
         public async Task<IActionResult> SSORedirect([FromForm] string access_token, [FromForm] string sid)
         {
             try
@@ -33,19 +39,42 @@ namespace ProyectoVisitas.Controllers
                     return BadRequest("Datos incompletos desde la Intranet.");
                 }
 
-                // 1. ABRIR Y VALIDAR EL TOKEN QUE MANDÓ LA INTRANET
-                var handler = new JwtSecurityTokenHandler();
+                // 1. OBTENER LA CONFIGURACIÓN DEL APPSETTINGS.JSON
+                var keyString = _configuration["Jwt:Key"];
+                var issuer = _configuration["Jwt:Issuer"];
+                var audience = _configuration["Jwt:Audience"];
 
-                // (Opcional) Aquí deberías validar la firma del token con la llave secreta, 
-                // pero por ahora confiaremos en que el token viene de la Intranet
-                var jwtToken = handler.ReadJwtToken(access_token);
+                var key = Encoding.UTF8.GetBytes(keyString);
 
-                // Extraemos el nombre del token (asumiendo que viene como unique_name o Name)
-                var nombre = jwtToken.Claims.FirstOrDefault(c => c.Type == "unique_name")?.Value ??
-                             jwtToken.Claims.FirstOrDefault(c => c.Type == ClaimTypes.Name)?.Value ??
+                // 2. CONFIGURAR EL "CADENERO" ESTRICTO
+                var tokenHandler = new JwtSecurityTokenHandler();
+                var validationParameters = new TokenValidationParameters
+                {
+                    ValidateIssuerSigningKey = true,
+                    IssuerSigningKey = new SymmetricSecurityKey(key), // Tu llave: BaLe0n-Intranet-2026...
+
+                    ValidateIssuer = true,
+                    ValidIssuer = issuer, // "IntranetAPI"
+
+                    ValidateAudience = true,
+                    ValidAudience = audience, // "IntranetFrontend"
+
+                    // Si el token ya expiró, lo rechaza
+                    ValidateLifetime = true,
+                    // Quitamos los 5 minutos de gracia que da C# por defecto
+                    ClockSkew = TimeSpan.Zero
+                };
+
+                // 3. VALIDAR EL TOKEN (Si alguien manda un token falso, esto lanza una excepción)
+                ClaimsPrincipal principal = tokenHandler.ValidateToken(access_token, validationParameters, out SecurityToken validatedToken);
+
+                // 4. EXTRAER LOS DATOS DEL TOKEN VALIDADO
+                // Buscamos el nombre (Dependiendo de cómo lo llame la Intranet)
+                var nombre = principal.FindFirst("unique_name")?.Value ??
+                             principal.FindFirst(ClaimTypes.Name)?.Value ??
                              "Usuario Desconocido";
 
-                // 2. JIT PROVISIONING: CREAR O ACTUALIZAR USUARIO EN BD
+                // 5. JIT PROVISIONING (Crear/Actualizar en BD)
                 var usuarioLocal = await _context.UsuariosWebs.FirstOrDefaultAsync(u => u.SSID == sid);
 
                 if (usuarioLocal == null)
@@ -54,7 +83,6 @@ namespace ProyectoVisitas.Controllers
                     {
                         SSID = sid,
                         NombreCompleto = nombre,
-                        // Asignamos SUPERADMIN temporalmente si es el SID de Misael, sino NORMAL
                         Rol = (sid == "S-1-5-21-514523672-912588543-873931468-1115") ? "SUPERADMIN" : "USUARIO_NORMAL",
                         FechaRegistro = DateTime.Now
                     };
@@ -62,14 +90,21 @@ namespace ProyectoVisitas.Controllers
                     await _context.SaveChangesAsync();
                 }
 
-                // 3. LA MAGIA: REDIRIGIR A REACT PASANDO EL TOKEN
-                // Redirigimos al navegador del usuario hacia tu React, y le pasamos el token en la URL
-                // para que React lo atrape, lo guarde y lo empiece a usar.
+                // 6. REDIRIGIR A REACT
                 string urlDestino = $"{_reactAppUrl}/auth/callback?token={access_token}&rol={usuarioLocal.Rol}";
                 return Redirect(urlDestino);
             }
+            catch (SecurityTokenExpiredException)
+            {
+                return Unauthorized("El token de la Intranet ha expirado. Por favor, inicie sesión nuevamente.");
+            }
+            catch (SecurityTokenSignatureKeyNotFoundException)
+            {
+                return Unauthorized("Firma del token inválida. Acceso denegado.");
+            }
             catch (Exception ex)
             {
+                // Cualquier otro error en la validación del JWT o en BD
                 return BadRequest($"Error en la autenticación SSO: {ex.Message}");
             }
         }
