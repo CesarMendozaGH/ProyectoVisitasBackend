@@ -8,6 +8,14 @@ using System.Security.Claims;
 using System.Text;
 using Microsoft.Extensions.Configuration;
 
+
+
+public class IntercambioRequest
+{
+    public string access_token { get; set; }
+    public string sid { get; set; }
+}
+
 namespace ProyectoVisitas.Controllers
 {
     [Route("api/[controller]")]
@@ -15,193 +23,112 @@ namespace ProyectoVisitas.Controllers
     public class AuthController : ControllerBase
     {
         private readonly BdvisitasContext _context;
-
-        // 2. DECLARAS LA VARIABLE DE CONFIGURACIÓN AQUÍ
         private readonly IConfiguration _configuration;
-
         private readonly string _reactAppUrl = "http://localhost:5173";
 
-        // 3. AGREGAS IConfiguration AL CONSTRUCTOR
         public AuthController(BdvisitasContext context, IConfiguration configuration)
         {
             _context = context;
-            _configuration = configuration; // <-- 4. Lo asignas para poder usarlo en tus métodos
+            _configuration = configuration;
         }
 
-        [HttpPost("SSORedirect")]
+        [HttpPost("IntercambiarToken")]
         [AllowAnonymous]
-        public async Task<IActionResult> SSORedirect([FromForm] string access_token, [FromForm] string sid)
+        public async Task<IActionResult> IntercambiarToken([FromBody] IntercambioRequest request)
         {
             try
             {
-                if (string.IsNullOrEmpty(access_token) || string.IsNullOrEmpty(sid))
-                {
-                    return BadRequest("Datos incompletos desde la Intranet.");
-                }
+                if (string.IsNullOrEmpty(request.access_token) || string.IsNullOrEmpty(request.sid))
+                    return BadRequest("Datos incompletos.");
 
-                // 1. OBTENER LA CONFIGURACIÓN DEL APPSETTINGS.JSON
-                var keyString = _configuration["Jwt:Key"];
-                var issuer = _configuration["Jwt:Issuer"];
-                var audience = _configuration["Jwt:Audience"];
-
-                var key = Encoding.UTF8.GetBytes(keyString);
-
-                // 2. CONFIGURAR EL "CADENERO" ESTRICTO
+                // 1. CONFIGURACIÓN DEL CADENERO
+                var key = Encoding.UTF8.GetBytes(_configuration["Jwt:Key"]);
                 var tokenHandler = new JwtSecurityTokenHandler();
                 var validationParameters = new TokenValidationParameters
                 {
                     ValidateIssuerSigningKey = true,
-                    IssuerSigningKey = new SymmetricSecurityKey(key), // Tu llave: BaLe0n-Intranet-2026...
-
+                    IssuerSigningKey = new SymmetricSecurityKey(key),
                     ValidateIssuer = true,
-                    ValidIssuer = issuer, // "IntranetAPI"
-
+                    ValidIssuer = _configuration["Jwt:Issuer"],
                     ValidateAudience = true,
-                    ValidAudience = audience, // "IntranetFrontend"
-
-                    // Si el token ya expiró, lo rechaza
+                    ValidAudience = _configuration["Jwt:Audience"],
                     ValidateLifetime = true,
-                    // Quitamos los 5 minutos de gracia que da C# por defecto
                     ClockSkew = TimeSpan.Zero
                 };
 
-                // 3. VALIDAR EL TOKEN (Si alguien manda un token falso, esto lanza una excepción)
-                ClaimsPrincipal principal = tokenHandler.ValidateToken(access_token, validationParameters, out SecurityToken validatedToken);
+                // 2. VALIDAR EL TOKEN DE LA INTRANET
+                ClaimsPrincipal principal = tokenHandler.ValidateToken(request.access_token, validationParameters, out SecurityToken validatedToken);
 
-                // 4. EXTRAER LOS DATOS DEL TOKEN VALIDADO
-                // Buscamos el nombre (Dependiendo de cómo lo llame la Intranet)
                 var nombre = principal.FindFirst("unique_name")?.Value ??
-                             principal.FindFirst(ClaimTypes.Name)?.Value ??
-                             "Usuario Desconocido";
+                             principal.FindFirst(ClaimTypes.Name)?.Value ?? "Usuario Desconocido";
 
-                // 5. JIT PROVISIONING (Crear/Actualizar en BD)
-                var usuarioLocal = await _context.UsuariosWebs.FirstOrDefaultAsync(u => u.SSID == sid);
-
+                // 3. BUSCAR EN BD
+                var usuarioLocal = await _context.UsuariosWebs.FirstOrDefaultAsync(u => u.SSID == request.sid);
                 if (usuarioLocal == null)
                 {
                     usuarioLocal = new UsuarioWeb
                     {
-                        SSID = sid,
+                        SSID = request.sid,
                         NombreCompleto = nombre,
-                        Rol = (sid == "S-1-5-21-514523672-912588543-873931468-1115") ? "SUPERADMIN" : "USUARIO_NORMAL",
+                        Rol = (request.sid == "S-1-5-21-514523672-912588543-873931468-1115") ? "SUPERADMIN" : "USUARIO_NORMAL",
                         FechaRegistro = DateTime.Now
                     };
                     _context.UsuariosWebs.Add(usuarioLocal);
                     await _context.SaveChangesAsync();
                 }
 
-                // 6. REDIRIGIR A REACT
-                string urlDestino = $"{_reactAppUrl}/auth/callback?token={access_token}&rol={usuarioLocal.Rol}";
-                return Redirect(urlDestino);
-            }
-            catch (SecurityTokenExpiredException)
-            {
-                return Unauthorized("El token de la Intranet ha expirado. Por favor, inicie sesión nuevamente.");
-            }
-            catch (SecurityTokenSignatureKeyNotFoundException)
-            {
-                return Unauthorized("Firma del token inválida. Acceso denegado.");
+                // 4. CREAR EL TOKEN INTERNO
+                var localClaims = new List<Claim>
+        {
+            new Claim(ClaimTypes.Name, usuarioLocal.NombreCompleto),
+            new Claim("SID", usuarioLocal.SSID),
+            new Claim(ClaimTypes.Role, usuarioLocal.Rol)
+        };
+
+                var creds = new SigningCredentials(new SymmetricSecurityKey(key), SecurityAlgorithms.HmacSha256);
+                var tokenLocal = new JwtSecurityToken(
+                    issuer: _configuration["Jwt:Issuer"],
+                    audience: _configuration["Jwt:Audience"],
+                    claims: localClaims,
+                    expires: DateTime.Now.AddHours(8),
+                    signingCredentials: creds
+                );
+
+                string miTokenInterno = tokenHandler.WriteToken(tokenLocal);
+
+                // 5. REGRESAR JSON A REACT (Ya no hacemos Redirect)
+                return Ok(new { token = miTokenInterno, rol = usuarioLocal.Rol });
             }
             catch (Exception ex)
             {
-                // Cualquier otro error en la validación del JWT o en BD
-                return BadRequest($"Error en la autenticación SSO: {ex.Message}");
+                return Unauthorized($"Error validando acceso: {ex.Message}");
             }
         }
 
-
         // ⚠️ BORRAR ANTES DE MANDAR A PRODUCCIÓN ⚠️
+        // Este método sigue sirviendo para generar tokens de prueba válidos para el simulador HTML
         [HttpGet("GenerarPaseDev")]
         [AllowAnonymous]
         public IActionResult GenerarPaseDev()
         {
-            // ... (Tu código de GenerarPaseDev se queda igual) ...
-            var claims = new System.Collections.Generic.List<System.Security.Claims.Claim>
+            var claims = new List<Claim>
             {
-                new System.Security.Claims.Claim(System.Security.Claims.ClaimTypes.Name, "MISAEL PEREZ"),
-                new System.Security.Claims.Claim("SID", "S-1-5-21-514523672-912588543-873931468-1115")
+                new Claim(ClaimTypes.Name, "MISAEL PEREZ"),
+                new Claim("SID", "S-1-5-21-514523672-912588543-873931468-1115")
+                // Nota: Ya no necesitamos ponerle el Rol aquí, porque el SSORedirect 
+                // ahora se encarga de buscarlo en la BD y fabricar un token nuevo.
             };
 
-            var key = new Microsoft.IdentityModel.Tokens.SymmetricSecurityKey(System.Text.Encoding.UTF8.GetBytes("BaLe0n-Intranet-2026-JWT-Key-Segura-01"));
-            var creds = new Microsoft.IdentityModel.Tokens.SigningCredentials(key, Microsoft.IdentityModel.Tokens.SecurityAlgorithms.HmacSha256);
+            var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes("BaLe0n-Intranet-2026-JWT-Key-Segura-01"));
+            var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
 
-            var token = new System.IdentityModel.Tokens.Jwt.JwtSecurityToken(
+            var token = new JwtSecurityToken(
                 issuer: "IntranetAPI", audience: "IntranetFrontend",
                 claims: claims, expires: DateTime.Now.AddHours(8),
                 signingCredentials: creds
             );
 
-            return Ok(new { token = new System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler().WriteToken(token) });
+            return Ok(new { token = new JwtSecurityTokenHandler().WriteToken(token) });
         }
     }
 }
-        //// --- MÉTODO TEMPORAL DE PRUEBA (Sin [Authorize]) ---
-        //// Este método recibe el token como string para no usar el candado de Swagger
-        //[HttpPost("PruebaLogin")]
-        //[AllowAnonymous]
-        //public async Task<IActionResult> PruebaLogin([FromBody] string tokenFalso)
-        //{
-        //    try
-        //    {
-        //        // 1. Abrimos el token manualmente (sin validar firma por ahora, solo leemos los datos)
-        //        var handler = new JwtSecurityTokenHandler();
-        //        var jwtToken = handler.ReadJwtToken(tokenFalso);
-
-        //        // 2. Extraemos el SID y Nombre tal como lo haríamos en producción
-        //        var sid = jwtToken.Claims.FirstOrDefault(c => c.Type == "SID")?.Value;
-        //        var nombre = jwtToken.Claims.FirstOrDefault(c => c.Type == "unique_name")?.Value ??
-        //                     jwtToken.Claims.FirstOrDefault(c => c.Type == ClaimTypes.Name)?.Value;
-
-        //        if (string.IsNullOrEmpty(sid)) return BadRequest("El token no contiene un SID.");
-
-        //        // 3. JIT Provisioning: Buscamos y creamos al usuario
-        //        var usuarioLocal = await _context.UsuariosWebs.FirstOrDefaultAsync(u => u.SSID == sid);
-
-        //        if (usuarioLocal == null)
-        //        {
-        //            usuarioLocal = new UsuarioWeb
-        //            {
-        //                SSID = sid,
-        //                NombreCompleto = nombre ?? "MISAEL PEREZ",
-        //                Rol = (sid == "SID_DE_MISAEL") ? "SUPERADMIN" : "USUARIO_NORMAL",
-        //                FechaRegistro = DateTime.Now
-        //            };
-        //            _context.UsuariosWebs.Add(usuarioLocal);
-        //            await _context.SaveChangesAsync();
-        //        }
-
-        //        return Ok(new { mensaje = "Éxito. Usuario creado en BD.", usuario = usuarioLocal });
-        //    }
-        //    catch (Exception ex)
-        //    {
-        //        return BadRequest($"Error al leer el token: {ex.Message}");
-        //    }
-        //}
-
-        //// --- GENERADOR DE TOKEN FALSO ---
-        //[HttpGet("GenerarPase")]
-        //[AllowAnonymous]
-        //public IActionResult GenerarPase()
-        //{
-        //    var claims = new List<Claim>
-        //    {
-        //        new Claim(ClaimTypes.Name, "MISAEL PEREZ"),
-        //        new Claim("SID", "SID_DE_MISAEL")
-        //    };
-
-        //    var key = new Microsoft.IdentityModel.Tokens.SymmetricSecurityKey(
-        //        System.Text.Encoding.UTF8.GetBytes("BaLe0n-Intranet-2026-JWT-Key-Segura-01")
-        //    );
-        //    var creds = new Microsoft.IdentityModel.Tokens.SigningCredentials(key, Microsoft.IdentityModel.Tokens.SecurityAlgorithms.HmacSha256);
-
-        //    var token = new JwtSecurityToken(
-        //        issuer: "IntranetAPI",
-        //        audience: "IntranetFrontend",
-        //        claims: claims,
-        //        expires: DateTime.Now.AddMinutes(60),
-        //        signingCredentials: creds
-        //    );
-
-        //    return Ok(new JwtSecurityTokenHandler().WriteToken(token));
-        //}
-    

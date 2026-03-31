@@ -30,6 +30,9 @@ builder.Services.AddCors(options =>
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 
+// Contratamos a nuestro servicio de fondo para cerrar visitas
+builder.Services.AddHostedService<ProyectoVisitas.Services.CierreAutomaticoService>();
+
 // Solo deja esto en tu Program.cs, quita todo lo de SecurityScheme
 builder.Services.AddSwaggerGen();
 //builder para excel
