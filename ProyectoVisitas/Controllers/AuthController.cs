@@ -97,7 +97,13 @@ namespace ProyectoVisitas.Controllers
                 string miTokenInterno = tokenHandler.WriteToken(tokenLocal);
 
                 // 5. REGRESAR JSON A REACT (Ya no hacemos Redirect)
-                return Ok(new { token = miTokenInterno, rol = usuarioLocal.Rol });
+                // 5. REGRESAR JSON A REACT
+                return Ok(new
+                {
+                    token = miTokenInterno,
+                    rol = usuarioLocal.Rol,
+                    nombre = usuarioLocal.NombreCompleto // <-- Le pasamos el nombre que sacamos de la BD
+                });
             }
             catch (Exception ex)
             {
