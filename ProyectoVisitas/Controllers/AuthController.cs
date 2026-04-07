@@ -8,14 +8,6 @@ using System.Security.Claims;
 using System.Text;
 using Microsoft.Extensions.Configuration;
 
-
-
-public class IntercambioRequest
-{
-    public string access_token { get; set; }
-    public string sid { get; set; }
-}
-
 namespace ProyectoVisitas.Controllers
 {
     [Route("api/[controller]")]
@@ -32,19 +24,46 @@ namespace ProyectoVisitas.Controllers
             _configuration = configuration;
         }
 
-        [HttpPost("IntercambiarToken")]
+        // ====================================================================
+        // 1. EL POST DE LA INTRANET (URL CREATE)
+        // ====================================================================
+        [HttpPost("SyncCrear")]
         [AllowAnonymous]
-        public async Task<IActionResult> IntercambiarToken([FromBody] IntercambioRequest request)
+        public async Task<IActionResult> SyncCrear([FromBody] SyncUsuarioDto dto)
+        {
+            if (dto == null || string.IsNullOrEmpty(dto.ssid)) return BadRequest("Datos nulos.");
+
+            var usuario = await _context.UsuariosWebs.FirstOrDefaultAsync(u => u.SSID == dto.ssid);
+            if (usuario == null)
+            {
+                usuario = new UsuarioWeb
+                {
+                    SSID = dto.ssid,
+                    NombreCompleto = string.IsNullOrEmpty(dto.nombre) ? "Usuario Intranet" : dto.nombre,
+                    Rol = (dto.ssid == "S-1-5-21-514523672-912588543-873931468-1115") ? "SUPERADMIN" : "USUARIO_NORMAL",
+                    FechaRegistro = DateTime.Now
+                };
+                _context.UsuariosWebs.Add(usuario);
+                await _context.SaveChangesAsync();
+            }
+            return Ok(new { mensaje = "Registrado correctamente" });
+        }
+
+        // ====================================================================
+        // 2. EL ACCESO FINAL (URL ACCESO)
+        // ====================================================================
+        [HttpPost("login")]
+        [AllowAnonymous]
+        public async Task<IActionResult> Login([FromForm] string access_token, [FromForm] string sid)
         {
             try
             {
-                if (string.IsNullOrEmpty(request.access_token) || string.IsNullOrEmpty(request.sid))
-                    return BadRequest("Datos incompletos.");
+                if (string.IsNullOrEmpty(access_token) || string.IsNullOrEmpty(sid))
+                    return BadRequest("Token o SID faltantes.");
 
-                // 1. CONFIGURACIÓN DEL CADENERO
                 var key = Encoding.UTF8.GetBytes(_configuration["Jwt:Key"]);
                 var tokenHandler = new JwtSecurityTokenHandler();
-                var validationParameters = new TokenValidationParameters
+                var validationParams = new TokenValidationParameters
                 {
                     ValidateIssuerSigningKey = true,
                     IssuerSigningKey = new SymmetricSecurityKey(key),
@@ -56,63 +75,39 @@ namespace ProyectoVisitas.Controllers
                     ClockSkew = TimeSpan.Zero
                 };
 
-                // 2. VALIDAR EL TOKEN DE LA INTRANET
-                ClaimsPrincipal principal = tokenHandler.ValidateToken(request.access_token, validationParameters, out SecurityToken validatedToken);
+                ClaimsPrincipal principal = tokenHandler.ValidateToken(access_token, validationParams, out SecurityToken validatedToken);
 
-                var nombre = principal.FindFirst("unique_name")?.Value ??
-                             principal.FindFirst(ClaimTypes.Name)?.Value ?? "Usuario Desconocido";
+                var usuarioLocal = await _context.UsuariosWebs.FirstOrDefaultAsync(u => u.SSID == sid);
+                if (usuarioLocal == null) return Unauthorized("El usuario no existe en la BD local.");
 
-                // 3. BUSCAR EN BD
-                var usuarioLocal = await _context.UsuariosWebs.FirstOrDefaultAsync(u => u.SSID == request.sid);
-                if (usuarioLocal == null)
-                {
-                    usuarioLocal = new UsuarioWeb
-                    {
-                        SSID = request.sid,
-                        NombreCompleto = nombre,
-                        Rol = (request.sid == "S-1-5-21-514523672-912588543-873931468-1115") ? "SUPERADMIN" : "USUARIO_NORMAL",
-                        FechaRegistro = DateTime.Now
-                    };
-                    _context.UsuariosWebs.Add(usuarioLocal);
-                    await _context.SaveChangesAsync();
-                }
-
-                // 4. CREAR EL TOKEN INTERNO
                 var localClaims = new List<Claim>
-        {
-            new Claim(ClaimTypes.Name, usuarioLocal.NombreCompleto),
-            new Claim("SID", usuarioLocal.SSID),
-            new Claim(ClaimTypes.Role, usuarioLocal.Rol)
-        };
+                {
+                    new Claim(ClaimTypes.Name, usuarioLocal.NombreCompleto),
+                    new Claim("SID", usuarioLocal.SSID),
+                    new Claim(ClaimTypes.Role, usuarioLocal.Rol)
+                };
 
                 var creds = new SigningCredentials(new SymmetricSecurityKey(key), SecurityAlgorithms.HmacSha256);
                 var tokenLocal = new JwtSecurityToken(
-                    issuer: _configuration["Jwt:Issuer"],
-                    audience: _configuration["Jwt:Audience"],
-                    claims: localClaims,
-                    expires: DateTime.Now.AddHours(8),
-                    signingCredentials: creds
+                    issuer: _configuration["Jwt:Issuer"], audience: _configuration["Jwt:Audience"],
+                    claims: localClaims, expires: DateTime.Now.AddHours(8), signingCredentials: creds
                 );
 
                 string miTokenInterno = tokenHandler.WriteToken(tokenLocal);
 
-                // 5. REGRESAR JSON A REACT (Ya no hacemos Redirect)
-                // 5. REGRESAR JSON A REACT
-                return Ok(new
-                {
-                    token = miTokenInterno,
-                    rol = usuarioLocal.Rol,
-                    nombre = usuarioLocal.NombreCompleto // <-- Le pasamos el nombre que sacamos de la BD
-                });
+                // Redirección hacia tu React
+                string urlDestino = $"{_reactAppUrl}/auth/callback?jwt_token={miTokenInterno}&rol={usuarioLocal.Rol}&nombre={Uri.EscapeDataString(usuarioLocal.NombreCompleto)}";
+                return Redirect(urlDestino);
             }
             catch (Exception ex)
             {
-                return Unauthorized($"Error validando acceso: {ex.Message}");
+                return Unauthorized($"Error de autenticación: {ex.Message}");
             }
         }
 
+        // ====================================================================
         // ⚠️ BORRAR ANTES DE MANDAR A PRODUCCIÓN ⚠️
-        // Este método sigue sirviendo para generar tokens de prueba válidos para el simulador HTML
+        // ====================================================================
         [HttpGet("GenerarPaseDev")]
         [AllowAnonymous]
         public IActionResult GenerarPaseDev()
@@ -121,8 +116,6 @@ namespace ProyectoVisitas.Controllers
             {
                 new Claim(ClaimTypes.Name, "MISAEL PEREZ"),
                 new Claim("SID", "S-1-5-21-514523672-912588543-873931468-1115")
-                // Nota: Ya no necesitamos ponerle el Rol aquí, porque el SSORedirect 
-                // ahora se encarga de buscarlo en la BD y fabricar un token nuevo.
             };
 
             var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes("BaLe0n-Intranet-2026-JWT-Key-Segura-01"));
@@ -136,5 +129,20 @@ namespace ProyectoVisitas.Controllers
 
             return Ok(new { token = new JwtSecurityTokenHandler().WriteToken(token) });
         }
+    }
+
+    // ====================================================================
+    // CLASES DTO (Deben ir fuera de los endpoints)
+    // ====================================================================
+    public class SyncUsuarioDto
+    {
+        public string ssid { get; set; }
+        public string nombre { get; set; }
+    }
+
+    public class IntercambioRequest
+    {
+        public string access_token { get; set; }
+        public string sid { get; set; }
     }
 }
